@@ -1,0 +1,122 @@
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy.orm import declarative_base, sessionmaker
+from datetime import datetime
+import uvicorn
+
+# 1. CONFIGURACIÓN DE LA BASE DE DATOS (SQLite - se crea sola)
+engine = create_engine("sqlite:///./portal.db")
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
+
+# 2. MODELO DE DATOS (Cómo se guarda la información)
+class Ticket(Base):
+    __tablename__ = "tickets"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre_cliente = Column(String(100), nullable=False)
+    problema = Column(Text, nullable=False)
+    solucion_ia = Column(Text, nullable=True)
+    fecha = Column(DateTime, default=datetime.utcnow)
+
+# Creamos las tablas en la base de datos
+Base.metadata.create_all(bind=engine)
+
+# 3. FUNCIÓN DE INTELIGENCIA ARTIFICIAL
+def generar_solucion_ia(problema_cliente: str) -> str:
+    """
+    Esta función recibe el problema del cliente y le devuelve una solución a la empresa.
+    Si tienes una API Key de OpenAI, puedes descomentar el código de abajo para usar la IA real.
+    """
+    # --- IA SIMULADA (Para que funcione sin que pagues nada ahora mismo) ---
+    problema_lower = problema_cliente.lower()
+    if "contraseña" in problema_lower:
+        return "Solución sugerida para la empresa: Verificar en el sistema si el usuario está bloqueado. Si lo está, resetear la contraseña y enviarle un correo temporal."
+    elif "pago" in problema_lower or "factura" in problema_lower:
+        return "Solución sugerida para la empresa: Revisar el portal de pagos para verificar si hubo una transacción fallida. Si es así, reembolsar y notificar al cliente."
+    else:
+        return "Solución sugerida para la empresa: Escalar al equipo de soporte de nivel 2 para revisión técnica del problema descrito."
+
+    # --- IA REAL (Descomenta esto si tienes una API Key de OpenAI) ---
+    # from langchain_openai import ChatOpenAI
+    # from langchain_core.prompts import ChatPromptTemplate
+    # import os
+    # os.environ["OPENAI_API_KEY"] = "AQUI_PONES_TU_API_KEY"
+    # llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3)
+    # prompt = ChatPromptTemplate.from_messages([
+    #     ("system", "Eres un asistente de soporte. Da una solución breve y clara para la empresa."),
+    #     ("human", "Problema: {problema}")
+    # ])
+    # chain = prompt | llm
+    # respuesta = chain.invoke({"problema": problema_cliente})
+    # return respuesta.content
+
+# 4. CREACIÓN DEL PORTAL WEB (FastAPI)
+app = FastAPI()
+
+# Ruta para ver el Portal del Cliente (Interfaz web sencilla)
+@app.get("/", response_class=HTMLResponse)
+def portal_cliente():
+    html = """
+    <html>
+        <head><title>Portal de Atención 24/7</title></head>
+        <body style="font-family: Arial; max-width: 600px; margin: 50px auto; text-align: center;">
+            <h2>Portal de Atención al Cliente</h2>
+            <p>Describa su problema. Se le dará seguimiento lo antes posible.</p>
+            <form action="/enviar" method="post">
+                <input type="text" name="nombre" placeholder="Su Nombre" required style="width: 100%; padding: 10px; margin: 5px 0;"><br>
+                <textarea name="problema" rows="5" placeholder="Describe tu problema aquí..." required style="width: 100%; padding: 10px; margin: 5px 0;"></textarea><br>
+                <button type="submit" style="padding: 10px 20px; background-color: #007BFF; color: white; border: none; cursor: pointer;">Enviar Solicitud</button>
+            </form>
+        </body>
+    </html>
+    """
+    return html
+
+# Ruta para RECIBIR la información, guardarla en BD y activar la IA
+@app.post("/enviar")
+async def recibir_solicitud(nombre: str = Form(...), problema: str = Form(...)):
+    # Nos conectamos a la base de datos
+    db = SessionLocal()
+    
+    # La IA analiza el problema
+    solucion = generar_solucion_ia(problema)
+    
+    # Guardamos todo en la Base de Datos
+    nuevo_ticket = Ticket(
+        nombre_cliente=nombre,
+        problema=problema,
+        solucion_ia=solucion
+    )
+    db.add(nuevo_ticket)
+    db.commit()
+    ticket_id = nuevo_ticket.id
+    db.close()
+    
+    return {
+        "mensaje": "Solicitud recibida exitosamente. Atenderemos tu caso pronto.",
+        "ticket_id": ticket_id,
+        "estado": "En Proceso"
+    }
+
+# Ruta para la EMPRESA (Ver solicitudes e informes)
+@app.get("/admin/reportes")
+def reporte_administracion():
+    db = SessionLocal()
+    tickets = db.query(Ticket).all()
+    db.close()
+    
+    resultado = []
+    for t in tickets:
+        resultado.append({
+            "ID": t.id,
+            "Cliente": t.nombre_cliente,
+            "Problema": t.problema,
+            "Solución Sugerida por IA": t.solucion_ia,
+            "Fecha": t.fecha
+        })
+    return {"total_tickets": len(resultado), "tickets": resultado}
+
+# 5. ENCENDER EL SERVIDOR
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)
